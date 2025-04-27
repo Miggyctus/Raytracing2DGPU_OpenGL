@@ -1,16 +1,21 @@
-#include <GL/glew.h>
+ï»¿#include <GL/glew.h>
 #include <GL/glut.h>
 #include <vector>
 #include <iostream>
 #include <cmath>
 #include <chrono>
+#include <windows.h>
+#include <comdef.h>
+#include <Wbemidl.h>
+
+#pragma comment(lib, "wbemuuid.lib")
 
 std::chrono::high_resolution_clock::time_point lastFrameTime;
 double speed = 100.0; // pixels per second
 #define PI 3.14159265358979323846
 #define WIDTH 1200
 #define HEIGHT 600
-#define raysN 30000
+#define raysN 15000
 #define objectsN 3
 #define maxBounces 3
 
@@ -68,6 +73,71 @@ void main()
     FragColor = vec4(ourColor, 1.0);
 }
 )";
+
+
+
+double getCPUUsage()
+{
+    static ULARGE_INTEGER lastIdleTime = { 0 };
+    static ULARGE_INTEGER lastKernelTime = { 0 };
+    static ULARGE_INTEGER lastUserTime = { 0 };
+
+    FILETIME idleTime, kernelTime, userTime;
+    if (!GetSystemTimes(&idleTime, &kernelTime, &userTime))
+        return -1.0; // error
+
+    ULARGE_INTEGER idle, kernel, user;
+    idle.LowPart = idleTime.dwLowDateTime;
+    idle.HighPart = idleTime.dwHighDateTime;
+    kernel.LowPart = kernelTime.dwLowDateTime;
+    kernel.HighPart = kernelTime.dwHighDateTime;
+    user.LowPart = userTime.dwLowDateTime;
+    user.HighPart = userTime.dwHighDateTime;
+
+    ULONGLONG sysIdleDiff = idle.QuadPart - lastIdleTime.QuadPart;
+    ULONGLONG sysKernelDiff = kernel.QuadPart - lastKernelTime.QuadPart;
+    ULONGLONG sysUserDiff = user.QuadPart - lastUserTime.QuadPart;
+    ULONGLONG sysTotal = sysKernelDiff + sysUserDiff;
+
+    lastIdleTime = idle;
+    lastKernelTime = kernel;
+    lastUserTime = user;
+
+    if (sysTotal == 0)
+        return 0.0;
+
+    return (1.0 - (double(sysIdleDiff) / double(sysTotal))) * 100.0;
+}
+
+
+void displayMetrics(int rayCount, int vertexCount, double deltaTimeMs)
+{
+    static int frameCounter = 0;
+    static double timeAccumulator = 0.0;
+
+    timeAccumulator += deltaTimeMs;
+    frameCounter++;
+
+    if (timeAccumulator >= 1000.0) // Every ~1 second
+    {
+        double averageFrameTime = timeAccumulator / frameCounter;
+        double fps = 1000.0 / averageFrameTime;
+
+        double cpuUsage = getCPUUsage();
+
+        std::cout << "=====================================" << std::endl;
+        std::cout << "Rays: " << rayCount << std::endl;
+        std::cout << "Vertices: " << vertexCount << std::endl;
+        std::cout << "Average Frame Time: " << averageFrameTime << " ms" << std::endl;
+        std::cout << "FPS: " << fps << std::endl;
+        std::cout << "CPU Usage: " << cpuUsage << " %" << std::endl;
+        std::cout << "=====================================" << std::endl;
+
+        frameCounter = 0;
+        timeAccumulator = 0.0;
+    }
+}
+
 
 void compileShaders()
 {
@@ -202,19 +272,19 @@ void drawRay(Ray rays[raysN], Circle objects[])
             // Set color depending on bounce number
             if (bounce == 0)
             {
-                r = 1.0f; g = 1.0f; b = 1.0f; // Blanco
+                r = 1.0f; g = 1.0f; b = 1.0f; 
             }
             else if (bounce == 1)
             {
-                r = 1; g = 0.5f; b = 0; // Azul claro
+                r = 1; g = 0.5f; b = 0; 
             }
             else if (bounce == 2)
             {
-                r = 0.7f; g = 0.4f; b = 1.0f; // Lila
+                r = 0.7f; g = 0.4f; b = 1.0f; 
             }
             else
             {
-                r = 0.5f; g = 0.5f; b = 0.5f; // Rebotes extra: gris
+                r = 0.5f; g = 0.5f; b = 0.5f; 
             }
         }
     }
@@ -298,6 +368,11 @@ void setup()
 
 void display()
 {
+    static auto lastTime = std::chrono::high_resolution_clock::now();
+    auto now = std::chrono::high_resolution_clock::now();
+    double deltaTime = std::chrono::duration<double, std::milli>(now - lastTime).count();
+    lastTime = now;
+
     glClear(GL_COLOR_BUFFER_BIT);
 
     glUseProgram(shaderProgram);
@@ -308,20 +383,23 @@ void display()
     glBindVertexArray(rayVAO);
     glDrawArrays(GL_LINES, 0, rayVertices.size());
 
+    displayMetrics(raysN, rayVertices.size(), deltaTime);
+
     glFlush();
 }
+
 
 void idle()
 {
     using namespace std::chrono;
 
-    // Calcular deltaTime
+    static auto lastTime = high_resolution_clock::now();
     auto now = high_resolution_clock::now();
-    double deltaTime = duration<double>(now - lastFrameTime).count();
-    lastFrameTime = now;
+    double deltaTime = duration<double, std::milli>(now - lastTime).count();
+    lastTime = now;
 
-    // Mover el círculo con deltaTime
-    shadow.y += speed * deltaTime;
+    // Move circle
+    shadow.y += speed * (deltaTime / 1000.0); // IMPORTANT: deltaTime was in milliseconds
 
     if (shadow.y - shadow.r <= 0 || shadow.y + shadow.r >= HEIGHT)
     {
@@ -331,6 +409,7 @@ void idle()
     updateVBO();
     glutPostRedisplay();
 }
+
 
 
 void mouse(int button, int state, int x, int y)
@@ -373,6 +452,12 @@ int main(int argc, char** argv)
     glutMouseFunc(mouse);
     glutMotionFunc(motion);
     lastFrameTime = std::chrono::high_resolution_clock::now();
+
+    const GLubyte* vendor = glGetString(GL_VENDOR);
+    const GLubyte* renderer = glGetString(GL_RENDERER);
+
+    std::cout << "GPU Vendor: " << vendor << std::endl;
+    std::cout << "GPU Renderer: " << renderer << std::endl;
 
     glutMainLoop();
     return 0;
